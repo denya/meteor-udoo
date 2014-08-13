@@ -3,13 +3,25 @@
 set -e
 set -u
 
+WITHOUT_DEPENDENCIES=false
+for arg in "$@"
+do
+    if [ "$arg" = "without-dependencies" ]; then
+        WITHOUT_DEPENDENCIES=true
+        break
+    else
+        echo "invalid argument: $arg"
+        exit
+    fi
+done
+
 UNAME=$(uname)
 ARCH=$(uname -m)
 
 if [ "$UNAME" == "Linux" ] ; then
-    if [ "$ARCH" != "i686" -a "$ARCH" != "x86_64" ] ; then
+    if [ "$ARCH" != "i686" -a "$ARCH" != "x86_64" -a "$ARCH" != "armv7l" ] ; then
         echo "Unsupported architecture: $ARCH"
-        echo "Meteor only supports i686 and x86_64 for now."
+        echo "Meteor only supports armv7l, i686 and x86_64 for now."
         exit 1
     fi
 
@@ -71,6 +83,8 @@ umask 022
 mkdir build
 cd build
 
+if [ "$WITHOUT_DEPENDENCIES" != true ]; then
+
 git clone https://github.com/joyent/node.git
 cd node
 # When upgrading node versions, also update the values of MIN_NODE_VERSION at
@@ -87,6 +101,8 @@ make install PORTABLE=1
 # export path so we use our new node for later builds
 export PATH="$DIR/bin:$PATH"
 
+fi
+
 which node
 
 which npm
@@ -96,6 +112,7 @@ which npm
 # packages that these depend on, so watch out for new dependencies when
 # you update version numbers.
 
+mkdir -p "$DIR/lib/node_modules"
 cd "$DIR/lib/node_modules"
 npm install semver@2.2.1
 npm install request@2.33.0
@@ -136,6 +153,8 @@ mv $FIBERS_ARCH ..
 rm -rf *
 mv ../$FIBERS_ARCH .
 cd ../..
+
+if [ "$WITHOUT_DEPENDENCIES" != true ]; then
 
 # Checkout and build mongodb.
 # We want to build a binary that includes SSL support but does not depend on a
@@ -201,6 +220,31 @@ cd "$DIR"
 stripBinary bin/node
 stripBinary mongodb/bin/mongo
 stripBinary mongodb/bin/mongod
+
+fi
+
+if [ "$WITHOUT_DEPENDENCIES" = true ]; then
+
+mkdir -p "$DIR/mongodb/bin"
+mkdir -p "$DIR/bin"
+
+echo "#!/usr/bin/env bash" > "$DIR/mongodb/bin/mongo"
+echo "mongo \"\$@\"" >> "$DIR/mongodb/bin/mongo"
+chmod +x "$DIR/mongodb/bin/mongo"
+
+echo "#!/usr/bin/env bash" > "$DIR/mongodb/bin/mongod"
+echo "mongod \"\$@\"" >> "$DIR/mongodb/bin/mongod"
+chmod +x "$DIR/mongodb/bin/mongod"
+
+echo "#!/usr/bin/env bash" > "$DIR/bin/node"
+echo "node \"\$@\"" >> "$DIR/bin/node"
+chmod +x "$DIR/bin/node"
+
+echo "#!/usr/bin/env bash" > "$DIR/bin/npm"
+echo "npm \"\$@\"" >> "$DIR/bin/npm"
+chmod +x "$DIR/bin/npm"
+
+fi
 
 echo BUNDLING
 

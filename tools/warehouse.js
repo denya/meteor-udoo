@@ -494,6 +494,8 @@ _.extend(warehouse, {
       arch = "i686";
     else if (arch === "x64")
       arch = "x86_64";
+    else if (arch === "armv7l")
+      arch = "armv7l";
     else
       throw new Error("Unsupported architecture " + arch);
     return os.type() + "_" + arch;

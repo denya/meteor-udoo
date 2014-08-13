@@ -1387,6 +1387,7 @@ _.extend(ServerTarget.prototype, {
     var archToPlatform = {
       'os.linux.x86_32': 'Linux_i686',
       'os.linux.x86_64': 'Linux_x86_64',
+      'os.linux.armv7l': 'Linux_ARMv7l',
       'os.osx.x86_64': 'Darwin_x86_64'
     };
     var arch = archinfo.host();
