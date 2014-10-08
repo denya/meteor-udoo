@@ -1,5 +1,6 @@
 Package.describe({
-  summary: "Login service for Github accounts"
+  summary: "Login service for Github accounts",
+  version: "1.0.1"
 });
 
 Package.on_use(function(api) {

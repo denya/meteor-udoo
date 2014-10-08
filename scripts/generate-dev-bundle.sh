@@ -25,7 +25,7 @@ if [ "$UNAME" == "Linux" ] ; then
         exit 1
     fi
 
-    MONGO_OS="linux"
+    OS="linux"
 
     stripBinary() {
         strip --remove-section=.comment --remove-section=.note $1
@@ -45,7 +45,7 @@ elif [ "$UNAME" == "Darwin" ] ; then
         exit 1
     fi
 
-    MONGO_OS="osx"
+    OS="osx"
 
     # We don't strip on Mac because we don't know a safe command. (Can't strip
     # too much because we do need node to be able to load objects like
@@ -62,7 +62,7 @@ PLATFORM="${UNAME}_${ARCH}"
 
 # save off meteor checkout dir as final target
 cd "`dirname "$0"`"/..
-TARGET_DIR=`pwd`
+CHECKOUT_DIR=`pwd`
 
 # Read the bundle version from the meteor shell script.
 BUNDLE_VERSION=$(perl -ne 'print $1 if /BUNDLE_VERSION=(\S+)/' meteor)
@@ -90,7 +90,7 @@ cd node
 # When upgrading node versions, also update the values of MIN_NODE_VERSION at
 # the top of tools/main.js and tools/server/boot.js, and the text in
 # docs/client/concepts.html and the README in tools/bundler.js.
-git checkout v0.10.29
+git checkout v0.10.29-with-npm-5821
 
 ./configure --prefix="$DIR"
 make -j4
@@ -112,47 +112,79 @@ which npm
 # packages that these depend on, so watch out for new dependencies when
 # you update version numbers.
 
-mkdir -p "$DIR/lib/node_modules"
-cd "$DIR/lib/node_modules"
-npm install semver@2.2.1
+# First, we install the modules that are dependencies of tools/server/boot.js:
+# the modules that users of 'meteor bundle' will also have to install. We save a
+# shrinkwrap file with it, too.  We do this in a separate place from
+# $DIR/lib/node_modules originally, because otherwise 'npm shrinkwrap' will get
+# confused by the pre-existing modules.
+mkdir "${DIR}/build/npm-install"
+cd "${DIR}/build/npm-install"
+cp "${CHECKOUT_DIR}/scripts/dev-bundle-package.json" package.json
+npm install
+npm shrinkwrap
+
+# This ignores the stuff in node_modules/.bin, but that's OK.
+cp -R node_modules/* "${DIR}/lib/node_modules/"
+mkdir "${DIR}/etc"
+mv package.json npm-shrinkwrap.json "${DIR}/etc/"
+
+# Fibers ships with compiled versions of its C code for a dozen platforms. This
+# bloats our dev bundle, and confuses dpkg-buildpackage and rpmbuild into
+# thinking that the packages need to depend on both 32- and 64-bit versions of
+# libstd++. Remove all the ones other than our architecture. (Expression based
+# on build.js in fibers source.)
+# XXX We haven't used dpkg-buildpackge or rpmbuild in ages. If we remove this,
+#     will it let you skip the "npm install fibers" step for running bundles?
+cd "$DIR/lib/node_modules/fibers/bin"
+FIBERS_ARCH=$(node -p -e 'process.platform + "-" + process.arch + "-v8-" + /[0-9]+\.[0-9]+/.exec(process.versions.v8)[0]')
+mv $FIBERS_ARCH ..
+rm -rf *
+mv ../$FIBERS_ARCH .
+
+# Now, install the rest of the npm modules, which are only used by the 'meteor'
+# tool (and not by the bundled app boot.js script).
+cd "${DIR}/lib"
+
 npm install request@2.33.0
-npm install keypress@0.2.1
-npm install underscore@1.5.2
-npm install fstream@0.1.25
-npm install tar@0.1.19
+npm install fstream@1.0.2
+npm install tar@1.0.1
 npm install kexec@0.2.0
 npm install source-map@0.1.32
-npm install source-map-support@0.2.5
-npm install bcrypt@0.7.7
-npm install node-aes-gcm@0.1.3
-npm install heapdump@0.2.5
+npm install browserstack-webdriver@2.41.1
+npm install node-inspector@0.7.4
+npm install progress@1.1.8
+npm install chalk@0.5.1
+
+#mkdir -p "$DIR/lib/node_modules"
+#cd "$DIR/lib/node_modules"
+#npm install semver@2.2.1
+
+# Clean up a big zip file it leaves behind.
+npm install phantomjs@1.8.1-1
+rm -rf node_modules/phantomjs/tmp
 
 # Fork of 1.0.2 with https://github.com/nodejitsu/node-http-proxy/pull/592
 npm install https://github.com/meteor/node-http-proxy/tarball/99f757251b42aeb5d26535a7363c96804ee057f0
 
-# Using the unreleased 1.1 branch. We can probably switch to a built NPM version
-# when it gets released.
+# Using the formerly-unreleased 1.1 branch. We can probably switch to a built
+# NPM version now. (For that matter, we ought to be able to get this from
+# the copy in js-analyze rather than in the dev bundle.)
 npm install https://github.com/ariya/esprima/tarball/5044b87f94fb802d9609f1426c838874ec2007b3
 
 # 2.4.0 (more or less, the package.json change isn't committed) plus our PR
 # https://github.com/williamwicks/node-eachline/pull/4
 npm install https://github.com/meteor/node-eachline/tarball/ff89722ff94e6b6a08652bf5f44c8fffea8a21da
 
-# If you update the version of fibers in the dev bundle, also update the "npm
-# install" command in docs/client/concepts.html and in the README in
-# tools/bundler.js.
-npm install fibers@1.0.1
-# Fibers ships with compiled versions of its C code for a dozen platforms. This
-# bloats our dev bundle, and confuses dpkg-buildpackage and rpmbuild into
-# thinking that the packages need to depend on both 32- and 64-bit versions of
-# libstd++. Remove all the ones other than our architecture. (Expression based
-# on build.js in fibers source.)
-FIBERS_ARCH=$(node -p -e 'process.platform + "-" + process.arch + "-v8-" + /[0-9]+\.[0-9]+/.exec(process.versions.v8)[0]')
-cd fibers/bin
-mv $FIBERS_ARCH ..
-rm -rf *
-mv ../$FIBERS_ARCH .
-cd ../..
+# Install jsdoc
+npm install jsdoc@3.3.0-alpha9
+
+# Cordova npm tool for mobile integration
+# XXX We install our own fork of cordova because we need a particular patch that
+# didn't land to cordova-android yet. As soon as it lands, we can switch back to
+# upstream.
+# https://github.com/apache/cordova-android/commit/445ddd89fb3269a772978a9860247065e5886249
+#npm install cordova@3.5.0-0.2.6
+npm install "https://github.com/meteor/cordova-cli/tarball/898040e71f6d6900cac4d477986b0451fb196ff1"
 
 if [ "$WITHOUT_DEPENDENCIES" != true ]; then
 
@@ -193,11 +225,11 @@ git checkout ssl-r$MONGO_VERSION
 MONGO_FLAGS="--ssl --release -j4 "
 MONGO_FLAGS+="--cpppath=$DIR/build/openssl-out/include --libpath=$DIR/build/openssl-out/lib "
 
-if [ "$MONGO_OS" == "osx" ]; then
+if [ "$OS" == "osx" ]; then
     # NOTE: '--64' option breaks the compilation, even it is on by default on x64 mac: https://jira.mongodb.org/browse/SERVER-5575
     MONGO_FLAGS+="--openssl=$DIR/build/openssl-out/lib "
     /usr/local/bin/scons $MONGO_FLAGS mongo mongod
-elif [ "$MONGO_OS" == "linux" ]; then
+elif [ "$OS" == "linux" ]; then
     MONGO_FLAGS+="--no-glibc-check --prefix=./ "
     if [ "$ARCH" == "x86_64" ]; then
       MONGO_FLAGS+="--64"
@@ -221,8 +253,6 @@ stripBinary bin/node
 stripBinary mongodb/bin/mongo
 stripBinary mongodb/bin/mongod
 
-fi
-
 if [ "$WITHOUT_DEPENDENCIES" = true ]; then
 
 mkdir -p "$DIR/mongodb/bin"
@@ -245,6 +275,14 @@ echo "npm \"\$@\"" >> "$DIR/bin/npm"
 chmod +x "$DIR/bin/npm"
 
 fi
+# Download BrowserStackLocal binary.
+BROWSER_STACK_LOCAL_URL="http://browserstack-binaries.s3.amazonaws.com/BrowserStackLocal-07-03-14-$OS-$ARCH.gz"
+
+cd "$DIR/build"
+curl -O $BROWSER_STACK_LOCAL_URL
+gunzip BrowserStackLocal*
+mv BrowserStackLocal* BrowserStackLocal
+mv BrowserStackLocal "$DIR/bin/"
 
 echo BUNDLING
 
@@ -252,6 +290,6 @@ cd "$DIR"
 echo "${BUNDLE_VERSION}" > .bundle_version.txt
 rm -rf build
 
-tar czf "${TARGET_DIR}/dev_bundle_${PLATFORM}_${BUNDLE_VERSION}.tar.gz" .
+tar czf "${CHECKOUT_DIR}/dev_bundle_${PLATFORM}_${BUNDLE_VERSION}.tar.gz" .
 
 echo DONE

@@ -1,6 +1,6 @@
 Package.describe({
   summary: "Run tests noninteractively, with results going to the console.",
-  internal: true
+  version: '1.0.2'
 });
 
 Package.on_use(function (api) {
