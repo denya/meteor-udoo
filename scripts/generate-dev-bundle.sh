@@ -81,6 +81,7 @@ cd "$DIR"
 chmod 755 .
 umask 022
 mkdir build
+mkdir -p lib/node_modules/
 cd build
 
 if [ "$WITHOUT_DEPENDENCIES" != true ]; then
@@ -278,6 +279,7 @@ cd "$DIR"
 stripBinary bin/node
 stripBinary mongodb/bin/mongo
 stripBinary mongodb/bin/mongod
+fi
 
 if [ "$WITHOUT_DEPENDENCIES" = true ]; then
 
