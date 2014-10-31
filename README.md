@@ -48,10 +48,67 @@ Once a minute, this will check if your meteor project is running, and start it i
 
 [Based on this stackoverflow answer](http://stackoverflow.com/a/2467513/281065).
 
- 18. Edit `~/meteor-udoo/run-service.sh` and set `PROJECT_DIR` to the absolute path to your meteor project. The default is the meteor "docs" project.
- 19. `sudo apt-get install daemontools daemontools-run svtools`
- 20. `cd ~ && wget http://codepad.org/9CgRVihO/raw.pl -O mkservice.pl && chmod +x mkservice.pl`
- 21. `sudo ~/mkservice.pl -d /etc/service/meteor -l -u debian -L debian "/home/debian/meteor-udoo/run-service.sh"`
+## Slow Start (for developers)
+
+If you want to run on the bleeding edge, or help develop Meteor, you
+can run Meteor directly from a git checkout.
+
+    git clone git://github.com/meteor/meteor.git
+    cd meteor
+
+If you're the sort of person who likes to build everything from scratch,
+you can build all the Meteor dependencies (node.js, npm, mongodb, etc)
+with the provided script. This requires git, a C and C++ compiler,
+autotools, and scons. If you do not run this script, Meteor will
+automatically download pre-compiled binaries when you first run it.
+
+    # OPTIONAL
+    ./scripts/generate-dev-bundle.sh
+
+Now you can run meteor directly from the checkout (if you did not
+build the dependency bundle above, this will take a few moments to
+download a pre-build version).
+
+    ./meteor --help
+
+From your checkout, you can read the docs locally. The `/docs` directory is a
+meteor application, so simply change into the `/docs` directory and launch
+the app:
+
+    cd docs/
+    ../meteor
+
+You'll then be able to read the docs locally in your browser at
+`http://localhost:3000/`.
+
+Note that if you run Meteor from a git checkout, you cannot pin apps to specific
+Meteor releases or run using different Meteor releases using `--release`.
+
+## Uninstalling Meteor
+
+Aside from a short launcher shell script, Meteor installs itself inside your
+home directory. To uninstall Meteor, run:
+
+    rm -rf ~/.meteor/
+    sudo rm /usr/local/bin/meteor
+
+## Developer Resources
+
+Building an application with Meteor?
+
+* Announcement list: sign up at http://www.meteor.com/
+* Ask a question: http://stackoverflow.com/questions/tagged/meteor
+* Meteor help and discussion mailing list: https://groups.google.com/group/meteor-talk
+* IRC: `#meteor` on `irc.freenode.net`
+
+Interested in contributing to Meteor?
+
+* Core framework design mailing list: https://groups.google.com/group/meteor-core
+* Contribution guidelines: https://github.com/meteor/meteor/tree/devel/Contributing.md
+
+We are hiring!  Visit https://www.meteor.com/jobs/working-at-meteor to
+learn more about working full-time on the Meteor project.
+>>>>>>> release/METEOR@1.0
 
 Your project should now be running as a service. It is started automatically on boot, and restarted if it should crash.
  * Use `sudo svstat /etc/service/meteor` to check its status

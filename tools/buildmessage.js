@@ -157,6 +157,10 @@ _.extend(MessageSet.prototype, {
   }
 });
 
+var spaces = function (n) {
+  return _.times(n, function() { return ' ' }).join('');
+};
+
 // XXX: This is now a little bit silly... ideas:
 // Can we just have one hierarchical state?
 // Can we combined job & messageSet
@@ -190,7 +194,6 @@ var getCurrentProgressTracker = function () {
   var progress = currentProgress.get();
   return progress ? progress : rootProgress;
 };
-
 
 var addChildTracker = function (title) {
   var options = {};
@@ -241,7 +244,7 @@ var capture = function (options, f) {
           var start;
           if (debugBuild) {
             start = Date.now();
-            console.log("START CAPTURE", nestingLevel, options.title, "took " + (end - start));
+            console.log(spaces(nestingLevel * 2), "START CAPTURE", nestingLevel, options.title, "took " + (end - start));
           }
           try {
             f();
@@ -250,7 +253,7 @@ var capture = function (options, f) {
 
             if (debugBuild) {
               var end = Date.now();
-              console.log("END CAPTURE", nestingLevel, options.title, "took " + (end - start));
+              console.log(spaces(nestingLevel * 2), "END CAPTURE", nestingLevel, options.title, "took " + (end - start));
             }
           }
         });
@@ -299,10 +302,22 @@ var enterJob = function (options, f) {
 
   return currentProgress.withValue(progress, function () {
     if (!currentMessageSet.get()) {
+      var nestingLevel = currentNestingLevel.get();
+      var start;
+      if (debugBuild) {
+        start = Date.now();
+        console.log(spaces(nestingLevel * 2), "START", nestingLevel, options.title);
+      }
       try {
-        return f();
+        return currentNestingLevel.withValue(nestingLevel + 1, function () {
+          return f();
+        });
       } finally {
         progress.reportProgressDone();
+        if (debugBuild) {
+          var end = Date.now();
+          console.log(spaces(nestingLevel * 2), "DONE", nestingLevel, options.title, "took " + (end - start));
+        }
       }
     }
 
@@ -317,7 +332,7 @@ var enterJob = function (options, f) {
         var start;
         if (debugBuild) {
           start = Date.now();
-          console.log("START", nestingLevel, options.title);
+          console.log(spaces(nestingLevel * 2), "START", nestingLevel, options.title);
         }
         try {
           return f();
@@ -325,7 +340,7 @@ var enterJob = function (options, f) {
           progress.reportProgressDone();
           if (debugBuild) {
             var end = Date.now();
-            console.log("DONE", nestingLevel, options.title, "took " + (end - start));
+            console.log(spaces(nestingLevel * 2), "DONE", nestingLevel, options.title, "took " + (end - start));
           }
         }
       });
@@ -423,7 +438,7 @@ var error = function (message, options) {
 var exception = function (error) {
   if (! currentJob.get()) {
     // XXX this may be the wrong place to do this, but it makes syntax errors in
-    // files loaded via unipackage.load have context.
+    // files loaded via isopack.load have context.
     if (error instanceof files.FancySyntaxError) {
       error = new Error("Syntax error: " + error.message + " at " +
         error.file + ":" + error.line + ":" + error.column);
@@ -487,43 +502,66 @@ var forkJoin = function (options, iterable, fn) {
     var job = currentJob.get();
     var messageSet = currentMessageSet.get();
     var progress = currentProgress.get();
+    var nestingLevel = currentNestingLevel.get();
 
-    _.each(iterable, function (/*arguments*/) {
-      var fut = new Future();
-      var fnArguments = arguments;
-      Fiber(function () {
-        currentProgress.withValue(progress, function () {
-          currentMessageSet.withValue(messageSet, function () {
-            currentJob.withValue(job, function () {
-              try {
-                var result = enterJob({title: (options.title || '') + ' child' }, function () {
-                  return fn.apply(null, fnArguments);
+    var parallel = (options.parallel !== undefined) ? options.parallel : true;
+    if (parallel) {
+      _.each(iterable, function (/*arguments*/) {
+        var fut = new Future();
+        var fnArguments = arguments;
+        Fiber(function () {
+          currentNestingLevel.withValue(nestingLevel, function() {
+            currentProgress.withValue(progress, function () {
+              currentMessageSet.withValue(messageSet, function () {
+                currentJob.withValue(job, function () {
+                  try {
+                    var result = enterJob({title: (options.title || '') + ' child'}, function () {
+                      return fn.apply(null, fnArguments);
+                    });
+                    fut['return'](result);
+                  } catch (e) {
+                    fut['throw'](e);
+                  }
                 });
-                fut['return'](result);
-              } catch (e) {
-                fut['throw'](e);
-              }
+              });
             });
           });
-        });
-      }).run();
-      futures.push(fut);
-    });
+        }).run();
+        futures.push(fut);
+      });
 
-    _.each(futures, function (future) {
-      try {
-        var result = future.wait();
-        results.push(result);
-        errors.push(null);
-      } catch (e) {
-        results.push(null);
-        errors.push(e);
+      _.each(futures, function (future) {
+        try {
+          var result = future.wait();
+          results.push(result);
+          errors.push(null);
+        } catch (e) {
+          results.push(null);
+          errors.push(e);
 
-        if (firstError === null) {
-          firstError = e;
+          if (firstError === null) {
+            firstError = e;
+          }
         }
-      }
-    });
+      });
+    } else {
+      // not parallel
+      _.each(iterable, function (/*arguments*/) {
+        var fnArguments = arguments;
+        try {
+          var result = fn.apply(null, fnArguments);
+          results.push(result);
+          errors.push(null);
+        } catch (e) {
+          results.push(null);
+          errors.push(e);
+
+          if (firstError === null) {
+            firstError = e;
+          }
+        }
+      });
+    }
   });
 
   if (firstError) {

@@ -14,7 +14,11 @@ OAuth._requestHandlers['1'] = function (service, query, res) {
 
   if (query.requestTokenAndRedirect) {
     // step 1 - get and store a request token
-    var callbackUrl = OAuth._redirectUri(service.serviceName, config, {state: query.state});
+    var callbackUrl = OAuth._redirectUri(service.serviceName, config, {
+      state: query.state,
+      cordova: (query.cordova === "true"),
+      android: (query.android === "true")
+    });
 
     // Get a request token to start auth process
     oauthBinding.prepareRequestToken(callbackUrl);
@@ -28,7 +32,9 @@ OAuth._requestHandlers['1'] = function (service, query, res) {
     // support for scope/name parameters
     var redirectUrl = undefined;
     if(typeof urls.authenticate === "function") {
-      redirectUrl = urls.authenticate(oauthBinding);
+      redirectUrl = urls.authenticate(oauthBinding, {
+        query: query
+      });
     } else {
       // Parse the URL to support additional query parameters in urls.authenticate
       var redirectUrlObj = url.parse(urls.authenticate, true);
@@ -40,6 +46,7 @@ OAuth._requestHandlers['1'] = function (service, query, res) {
     }
 
     // redirect to provider login, which will redirect back to "step 2" below
+
     res.writeHead(302, {'Location': redirectUrl});
     res.end();
   } else {

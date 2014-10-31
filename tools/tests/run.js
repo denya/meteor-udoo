@@ -5,6 +5,7 @@ var net = require('net');
 var Future = require('fibers/future');
 var _ = require('underscore');
 var files = require('../files.js');
+var httpHelpers = require('../http-helpers.js');
 
 var MONGO_LISTENING =
   { stdout: " [initandlisten] waiting for connections on port" };
@@ -35,11 +36,11 @@ selftest.define("run", function () {
 
   // File change
   s.write("empty.js", "");
-  run.waitSecs(1);
+  run.waitSecs(2);
   run.match("restarted");
   s.write("empty.js", " ");
-  run.waitSecs(1);
-  run.match("restarted (x2)");
+  run.waitSecs(2);
+  run.match("restarted");
   // XXX want app to generate output so that we can see restart counter reset
 
   // Crashes
@@ -55,7 +56,9 @@ selftest.define("run", function () {
   run.match("restarted");
   s.write("empty.js", "");
   run.waitSecs(5);
-  run.match("restarted (x2)"); // see that restart counter reset
+  // We used to see the restart counter reset but right now restart messages
+  // don't coalesce due to intermediate use of the progress bar.
+  run.match("restarted");
   s.write("crash.js", "process.kill(process.pid, 'SIGKILL');");
   run.waitSecs(5);
   run.match("from signal: SIGKILL");
@@ -251,7 +254,7 @@ selftest.define("update during run", ["checkout"], function () {
   run.waitSecs(2);
   run.match('localhost:3000');
   s.write('.meteor/release', 'METEOR@v2');
-  run.matchErr('to Meteor METEOR@v2 from Meteor METEOR@v1');
+  run.matchErr('to Meteor v2 from Meteor v1');
   run.expectExit(254);
 
   // But not if the release was forced (case 1)
@@ -339,4 +342,72 @@ selftest.define("run with mongo crash", ["checkout"], function () {
   run.read("MongoDB exited due to excess clock skew\n");
   run.expectEnd();
   run.expectExit(254);
+});
+
+// Test that when the parent runner process is SIGKILLed, the child
+// process exits also.
+selftest.define("run and SIGKILL parent process", function () {
+  var s = new Sandbox();
+  var run;
+
+  s.createApp("myapp", "app-prints-pid");
+  s.cd("myapp");
+
+  run = s.run();
+  run.waitSecs(30);
+  var match = run.match(/My pid is (\d+)/);
+  var childPid;
+  if (! match || ! match[1]) {
+    selftest.fail("No pid printed");
+  }
+  childPid = match[1];
+
+  process.kill(run.proc.pid, "SIGKILL");
+  // This sleep should be a little more time than the interval at which
+  // the child checks if the parent is still alive, in
+  // packages/webapp/webapp_server.js.
+  utils.sleepMs(3500);
+
+  // Send the child process a signal of 0. If there is no error, it
+  // means that the process is still running, which is not what we
+  // expect.
+  var caughtError;
+  try {
+    process.kill(childPid, 0);
+  } catch (err) {
+    caughtError = err;
+  }
+
+  if (! caughtError) {
+    selftest.fail("Child process " + childPid + " is still running");
+  }
+
+  run.stop();
+
+  // Test that passing a bad pid in --parent-pid logs an error and exits
+  // immediately.
+  s.set("METEOR_BAD_PARENT_PID_FOR_TEST", "t");
+  run = s.run();
+  run.waitSecs(30);
+  run.match("must be a valid process ID");
+  run.match("Your application is crashing");
+  run.stop();
+});
+
+selftest.define("'meteor run --port' requires a port", function () {
+  var s = new Sandbox();
+  var run;
+
+  s.createApp("myapp", "app-prints-pid");
+  s.cd("myapp");
+
+  run = s.run("run", "--port", "example.com");
+  run.waitSecs(30);
+  run.matchErr("--port must include a port");
+  run.expectExit(1);
+
+  run = s.run("run", "--port", "http://example.com");
+  run.waitSecs(30);
+  run.matchErr("--port must include a port");
+  run.expectExit(1);
 });

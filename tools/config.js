@@ -112,6 +112,25 @@ _.extend(exports, {
     return addScheme(getAuthServiceHost()) + "/auth";
   },
 
+  // URL for the DDP interface to the meteor build farm, typically
+  // "https://build.meteor.com".
+  getBuildFarmUrl: function () {
+    if (process.env.METEOR_BUILD_FARM_URL)
+      return process.env.METEOR_BUILD_FARM_URL;
+    var host = config.getBuildFarmDomain();
+
+    return addScheme(host);
+  },
+
+  getBuildFarmDomain: function () {
+    if (process.env.METEOR_BUILD_FARM_URL) {
+      var parsed = url.parse(process.env.METEOR_BUILD_FARM_URL);
+      return parsed.host;
+    } else {
+      return getUniverse().replace(/^www\./, 'build.');
+    }
+  },
+
   // URL for the DDP interface to the package server, typically
   // "https://packages.meteor.com". (Really should be a ddp:// URL --
   // we'll get there soon enough.)
@@ -193,7 +212,7 @@ _.extend(exports, {
   getPackagesDirectoryName: function (serverUrl) {
     var self = this;
 
-    var prefix = config.getPackageServerFilePrefix();
+    var prefix = config.getPackageServerFilePrefix(serverUrl);
     if (prefix !== 'packages') {
       prefix = path.join('packages-from-server', prefix);
     }
@@ -203,32 +222,23 @@ _.extend(exports, {
 
   getLocalPackageCacheFilename: function (serverUrl) {
     var self = this;
-    var prefix = self.getPackageServerFilePrefix();
+    var prefix = self.getPackageServerFilePrefix(serverUrl);
 
-    // Should look like 'packages.data.json' in the default case
-    // (test-packages.data.json before 0.9.0).
-    return prefix + ".data.json";
+    // Should look like 'packages.data.db' in the default case
+    // (packages.data.json before 0.9.4).
+    return prefix + ".data.db";
   },
 
   getPackageStorage: function (tropo) {
     var self = this;
     tropo = tropo || tropohouse.default;
-    return path.join(tropo.root, "package-metadata", "v1.1",
+    return path.join(tropo.root, "package-metadata", "v2.0.1",
                      self.getLocalPackageCacheFilename());
   },
 
-  // XXX this does not appear to be called.
-  getPackageStorageVersion: function() {
-    return "1.0";
-  },
-
-  // NOTE: Uses the v1 directory, not v1.1 like package-metadata. This
-  // is so that we don't double-print banners and the like. Someday we
-  // should unifiy these so that the tool doesn't have to write to
-  // multiple different versions of these directories.
   getBannersShownFilename: function() {
     return path.join(tropohouse.default.root,
-                     "package-metadata", "v1", "banners-shown.json");
+                     "package-metadata", "v1.1", "banners-shown.json");
   },
 
   // Return the domain name of the current Meteor Accounts server in

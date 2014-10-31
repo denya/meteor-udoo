@@ -1,3 +1,15 @@
+var DEBUG_TAG = 'METEOR CORDOVA DEBUG (autoupdate_cordova.js) ';
+var log = function (msg) {
+  console.log(DEBUG_TAG + msg);
+};
+
+// This constant was picked by testing on iOS 7.1
+// We limit the number of concurrent downloads because iOS gets angry on the
+// application when a certain limit is exceeded and starts timing-out the
+// connections in 1-2 minutes which makes the whole HCP really slow.
+var MAX_NUM_CONCURRENT_DOWNLOADS = 30;
+var MAX_RETRY_COUNT = 5;
+
 var autoupdateVersionCordova = __meteor_runtime_config__.autoupdateVersionCordova || "unknown";
 
 // The collection of acceptable client versions.
@@ -16,44 +28,39 @@ var writeFile = function (directoryPath, fileName, content, cb) {
   var fail = function (err) {
     cb(new Error("Failed to write file: ", err), null);
   };
-  window.resolveLocalFileSystemURL(directoryPath,
-    function (dirEntry) {
-      var success = function (fileEntry) {
-        fileEntry.createWriter(function (writer) {
-          writer.onwrite = function (evt) {
-            var result = evt.target.result;
-            cb(null, result);
-          };
-          writer.onerror = fail;
-          writer.write(content);
-        }, fail);
-      };
 
-      dirEntry.getFile(fileName, { create: true, exclusive: false },
-        success, fail);
-    }, fail);
+  window.resolveLocalFileSystemURL(directoryPath, function (dirEntry) {
+    var success = function (fileEntry) {
+      fileEntry.createWriter(function (writer) {
+        writer.onwrite = function (evt) {
+          var result = evt.target.result;
+          cb(null, result);
+        };
+        writer.onerror = fail;
+        writer.write(content);
+      }, fail);
+    };
+
+    dirEntry.getFile(fileName, {
+      create: true,
+      exclusive: false
+    }, success, fail);
+  }, fail);
 };
 
 var restartServer = function (location) {
-  console.log('restartserver with location ' + location);
-  var fail = function (err) { console.log('something failed: ' + err.message) };
-  var httpd = cordova && cordova.plugins && cordova.plugins.CorHttpd;
+  log('restartServer with location ' + location);
+  var fail = function (err) { log("Unexpected error in restartServer: " + err.message) };
+  var httpd = cordova && cordova.plugins && cordova.plugins.CordovaUpdate;
 
   if (! httpd) {
     fail(new Error('no httpd'));
     return;
   }
 
-  var startServer = function (cordovajsRoot, prevUrl) {
-    var port;
-    if (prevUrl) {
-      var parts = prevUrl.split(':');
-      if (parts.length)
-        port = parseInt(parts[parts.length - 1], 10);
-    }
+  var startServer = function (cordovajsRoot) {
     httpd.startServer({
       'www_root' : location,
-      'port' : port,
       'cordovajs_root': cordovajsRoot
     }, function (url) {
       Package.reload.Reload._reload();
@@ -61,108 +68,111 @@ var restartServer = function (location) {
   };
 
   httpd.getCordovajsRoot(function (cordovajsRoot) {
-    httpd.getURL(function (url) {
-      if (url.length > 0) {
-        // already have a server running, stop it
-        httpd.stopServer(function () {
-          startServer(cordovajsRoot, url);
-        }, fail);
-      } else {
-        // just start a server
-        startServer(cordovajsRoot);
-      }
-    }, fail);
+    startServer(cordovajsRoot);
   }, fail);
 };
 
 var hasCalledReload = false;
+var updating = false;
+var localPathPrefix = null;
+
 var onNewVersion = function () {
   var ft = new FileTransfer();
   var urlPrefix = Meteor.absoluteUrl() + '__cordova';
-
-  var localPathPrefix = cordova.file.applicationStorageDirectory +
-                        'Documents/meteor/';
-
-
   HTTP.get(urlPrefix + '/manifest.json', function (err, res) {
     if (err || ! res.data) {
-      console.log('failed to download the manifest ' + (err && err.message) + ' ' + (res && res.content));
+      log('Failed to download the manifest ' + (err && err.message) + ' ' + (res && res.content));
       return;
     }
 
-    var program = res.data;
-    var manifest = _.clone(program.manifest);
-    var version = program.version;
-    var ft = new FileTransfer();
+    updating = true;
+    ensureLocalPathPrefix(_.bind(downloadNewVersion, null, res.data));
+  });
+};
 
-    manifest.push({ url: '/index.html?' + Random.id() });
+var downloadNewVersion = function (program) {
+  var urlPrefix = Meteor.absoluteUrl() + '__cordova';
+  var manifest = _.clone(program.manifest);
+  var version = program.version;
+  var ft = new FileTransfer();
 
-    var downloads = 0;
-    _.each(manifest, function (item) {
-      if (item.url) downloads++;
-    });
+  manifest.push({ url: '/index.html?' + Random.id() });
 
-    var versionPrefix = localPathPrefix + version;
+  var versionPrefix = localPathPrefix + version;
 
-    var afterAllFilesDownloaded = _.after(downloads, function () {
-      writeFile(versionPrefix, 'manifest.json',
-          JSON.stringify(program, undefined, 2),
-          function (err) {
+  var queue = [];
+  _.each(manifest, function (item) {
+    if (! item.url) return;
 
+    var url = item.url;
+    url = url.replace(/\?.+$/, '');
+
+    queue.push(url);
+  });
+
+  var afterAllFilesDownloaded = _.after(queue.length, function () {
+    var wroteManifest = function (err) {
+      if (err) {
+        log("Failed to write manifest.json: " + err);
+        // XXX do something smarter?
+        return;
+      }
+
+      // success! downloaded all sources and saved the manifest
+      // save the version string for atomicity
+      writeFile(localPathPrefix, 'version', version, function (err) {
         if (err) {
-          console.log("Failed to write manifest.json");
-          // XXX do something smarter?
+          log("Failed to write version: " + err);
           return;
         }
 
-        // success! downloaded all sources and saved the manifest
-        // save the version string for atomicity
-        writeFile(localPathPrefix, 'version', version,
-            function (err) {
-          if (err) {
-            console.log("Failed to write version");
-            return;
-          }
-
-          // don't call reload twice!
-          if (! hasCalledReload) {
-            // relative to 'bundle.app/www'
-            var location = '../../Documents/meteor/' + version;
-            restartServer(location);
-          }
-        });
+        // don't call reload twice!
+        if (! hasCalledReload) {
+          var location = uriToPath(localPathPrefix + version);
+          restartServer(location);
+        }
       });
-    });
+    };
 
-    _.each(manifest, function (item) {
-      if (! item.url) return;
+    writeFile(versionPrefix, 'manifest.json',
+              JSON.stringify(program, undefined, 2), wroteManifest);
+  });
 
-      var url = item.url;
-      url = url.replace(/\?.+$/, '');
+  var dowloadUrl = function (url) {
+    console.log(DEBUG_TAG + "start dowloading " + url);
+    // Add a cache buster to ensure that we don't cache an old asset.
+    var uri = encodeURI(urlPrefix + url + '?' + Random.id());
 
-      // Add a cache buster to ensure that we don't cache an old asset.
-      var uri = encodeURI(urlPrefix + url + '?' + Random.id());
+    // Try to dowload the file a few times.
+    var tries = 0;
+    var tryDownload = function () {
+      ft.download(uri, versionPrefix + encodeURI(url), function (entry) {
+        if (entry) {
+          console.log(DEBUG_TAG + "done dowloading " + url);
+          // start downloading next queued url
+          if (queue.length)
+            dowloadUrl(queue.shift());
+          afterAllFilesDownloaded();
+        }
+      }, function (err) {
+        // It failed, try again if we have tried less than 5 times.
+        if (tries++ < MAX_RETRY_COUNT) {
+          log("Download error, will retry (#" + tries + "): " + uri);
+          tryDownload();
+        } else {
+          log('Download failed: ' + JSON.stringify(err) + ", source=" + err.source + ", target=" + err.target);
+        }
+      });
+    };
 
-      // Try to dowload the file a few times.
-      var tries = 0;
-      var tryDownload = function () {
-        ft.download(uri, versionPrefix + url, function (entry) {
-          if (entry) {
-            afterAllFilesDownloaded();
-          }
-        }, function (err) {
-          // It failed, try again if we have tried less than 5 times.
-          if (tries++ < 5) {
-            tryDownload();
-          } else {
-            console.log('fail source: ', error.source);
-            console.log('fail target: ', error.target);
-          }
-        });
-      };
+    tryDownload();
+  };
 
-      tryDownload();
-    });
+  _.times(Math.min(MAX_NUM_CONCURRENT_DOWNLOADS, queue.length), function () {
+    var nextUrl = queue.shift();
+    // XXX defer the next download so iOS doesn't rate limit us on concurrent
+    // downloads
+    Meteor.setTimeout(dowloadUrl.bind(null, nextUrl), 50);
   });
 };
 
@@ -173,9 +183,10 @@ var retry = new Retry({
 var failures = 0;
 
 Autoupdate._retrySubscription = function () {
- Meteor.subscribe("meteor_autoupdate_clientVersions", {
-    onError: function (error) {
-      Meteor._debug("autoupdate subscription failed:", error);
+  var appId = __meteor_runtime_config__.appId;
+  Meteor.subscribe("meteor_autoupdate_clientVersions", appId, {
+    onError: function (err) {
+      Meteor._debug("autoupdate subscription failed:", err);
       failures++;
       retry.retryLater(failures, function () {
         // Just retry making the subscription, don't reload the whole
@@ -206,4 +217,94 @@ Autoupdate._retrySubscription = function () {
   }
 };
 
+Meteor.startup(function () {
+  clearAutoupdateCache(autoupdateVersionCordova);
+});
 Meteor.startup(Autoupdate._retrySubscription);
+
+
+// A helper that removes old directories left from previous autoupdates
+var clearAutoupdateCache = function (currentVersion) {
+  ensureLocalPathPrefix(function () {
+    // Try to clean up our cache directory, make sure to scan the directory
+    // *before* loading the actual app. This ordering will prevent race
+    // conditions when the app code tries to download a new version before
+    // the old-cache removal has scanned the cache folder.
+    listDirectory(localPathPrefix, {dirsOnly: true}, function (err, names) {
+      // Couldn't get the list of dirs or risking to get into a race with an
+      // on-going update to disk.
+      if (err || updating) {
+        return;
+      }
+
+      _.each(names, function (name) {
+        // Skip the folder with the latest version
+        if (name === currentVersion)
+          return;
+
+        // remove everything else, as we don't want to keep too much cache
+        // around on disk
+        removeDirectory(localPathPrefix + name + '/', function (err) {
+          if (err) {
+            log('Failed to remove an old cache folder '
+                + name + ':' + err.message);
+          } else {
+            log('Successfully removed an old cache folder ' + name);
+          }
+        });
+      });
+    });
+  })
+};
+
+// Cordova File plugin helpers
+var listDirectory = function (url, options, cb) {
+  if (typeof options === 'function')
+    cb = options, options = {};
+
+  var fail = function (err) { cb(err); };
+  window.resolveLocalFileSystemURL(url, function (entry) {
+    var reader = entry.createReader();
+    reader.readEntries(function (entries) {
+      var names = [];
+      _.each(entries, function (entry) {
+        if (! options.dirsOnly || entry.isDirectory)
+          names.push(entry.name);
+      });
+      cb(null, names);
+    }, fail);
+  }, fail);
+};
+
+var removeDirectory = function (url, cb) {
+  var fail = function (err) {
+    cb(err);
+  };
+  window.resolveLocalFileSystemURL(url, function (entry) {
+    entry.removeRecursively(function () { cb(); }, fail);
+  }, fail);
+};
+
+var uriToPath = function (uri) {
+  return decodeURI(uri).replace(/^file:\/\//g, '');
+};
+
+var ensureLocalPathPrefix = function (cb) {
+  if (! localPathPrefix) {
+    if (! cordova.file.dataDirectory) {
+      // Since ensureLocalPathPrefix function is always called on
+      // Meteor.startup, all Cordova plugins should be ready.
+      // XXX Experiments have shown that it is not always the case, even when
+      // the cordova.file symbol is attached, properties like dataDirectory
+      // still can be null. Poll until we are sure the property is attached.
+      console.log(DEBUG_TAG + 'cordova.file.dataDirectory is null, retrying in 20ms');
+      Meteor.setTimeout(_.bind(ensureLocalPathPrefix, null, cb), 20);
+    } else {
+      localPathPrefix = cordova.file.dataDirectory + 'meteor/';
+      cb();
+    }
+  } else {
+    cb();
+  }
+};
+

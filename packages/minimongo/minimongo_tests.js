@@ -695,6 +695,19 @@ Tinytest.add("minimongo - selector_compiler", function (test) {
   nomatch({a: /xxx/}, {});
   nomatch({a: {$regex: 'xxx'}}, {});
 
+  // GitHub issue #2817:
+  // Regexps with a global flag ('g') keep a state when tested against the same
+  // string. Selector shouldn't return different result for similar documents
+  // because of this state.
+  var reusedRegexp = /sh/ig;
+  match({a: reusedRegexp}, {a: 'Shorts'});
+  match({a: reusedRegexp}, {a: 'Shorts'});
+  match({a: reusedRegexp}, {a: 'Shorts'});
+
+  match({a: {$regex: reusedRegexp}}, {a: 'Shorts'});
+  match({a: {$regex: reusedRegexp}}, {a: 'Shorts'});
+  match({a: {$regex: reusedRegexp}}, {a: 'Shorts'});
+
   test.throws(function () {
     match({a: {$options: 'i'}}, {a: 12});
   });
@@ -2254,6 +2267,8 @@ Tinytest.add("minimongo - modify", function (test) {
          {a: [1, 2, 3, 4]}); // tested
   modify({a: [1, 2]}, {$addToSet: {a: {b: 12, $each: [3, 1, 4]}}},
          {a: [1, 2, {b: 12, $each: [3, 1, 4]}]}); // tested
+  modify({}, {$addToSet: {a: {$each: []}}}, {a: []});
+  modify({}, {$addToSet: {a: {$each: [1]}}}, {a: [1]});
   modify({a: []}, {$addToSet: {'a.1': 99}}, {a: [null, [99]]});
   modify({a: {}}, {$addToSet: {'a.x': 99}}, {a: {x: [99]}});
 
